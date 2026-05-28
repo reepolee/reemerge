@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use anyhow::{anyhow, Context, Result};
 use colored::*;
@@ -67,11 +68,15 @@ fn get_branches() -> Result<Vec<String>> {
     Ok(branches)
 }
 
-fn select_branch(branches: &[String], prompt: &str) -> Result<String> {
+fn select_branch(branches: &[String], prompt: &str, preferred: &str) -> Result<String> {
+    let default_index = branches
+        .iter()
+        .position(|b| b == preferred || b == &format!("origin/{}", preferred))
+        .unwrap_or(0);
     let index = Select::with_theme(&ColorfulTheme::default())
         .with_prompt(prompt)
         .items(branches)
-        .default(0)
+        .default(default_index)
         .interact()?;
     Ok(branches[index].clone())
 }
@@ -229,6 +234,9 @@ fn apply_file_selection(commit: &CommitInfo, files: &[String]) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    // Parse CLI args
+    let show_diff_flag = std::env::args().any(|a| a == "--diff");
+
     println!();
     println!("{}", "╔═══════════════════════════════════════════╗".bright_green());
     println!("{}", "║           PR Prep - Cherry Pick           ║".bright_green().bold());
@@ -264,7 +272,7 @@ fn main() -> Result<()> {
     println!("  {} Found {} branches\n", "✓".green(), branches.len().to_string().yellow());
 
     // ── 4. Select target branch ───────────────────────────────
-    let target = select_branch(&branches, "Which branch do you want to PR into (target)?");
+    let target = select_branch(&branches, "Which branch do you want to PR into (target)?", "main");
     let target = match target {
         Ok(b) => b,
         Err(e) => {
@@ -279,7 +287,7 @@ fn main() -> Result<()> {
     println!();
 
     // ── 5. Select source branch ───────────────────────────────
-    let source = select_branch(&branches, "Which branch contains the changes (source)?");
+    let source = select_branch(&branches, "Which branch contains the changes (source)?", "develop");
     let source = match source {
         Ok(b) => b,
         Err(e) => {
@@ -303,98 +311,140 @@ fn main() -> Result<()> {
 
     println!("  {} Found {} commit(s)\n", "✓".green(), commits.len().to_string().yellow());
 
-    // ── 7. For each commit, ask how to handle it ──────────────
-    let mut selections: Vec<CommitSelection> = Vec::new();
+    // ── 7. Let user select commits to include ────────────────
+    println!("{}", "─".repeat(64).dimmed());
+    println!("  {} Commits on {} not on {}:", "📋".bold(), source.cyan(), target.cyan());
+    println!();
 
     for (i, commit) in commits.iter().enumerate() {
-        println!("{}", "─".repeat(64).dimmed());
+        let file_count = commit.files.len();
         println!(
-            "  {} Commit {}/{}: {} {}",
-            "●".bright_blue(),
+            "  {:>2}.  {}  {}  {} files:{}",
             (i + 1).to_string().yellow(),
-            commits.len().to_string().yellow(),
             commit.hash[..8].bright_green(),
-            commit.subject.bold()
+            commit.subject.bold(),
+            file_count.to_string().dimmed(),
+            if file_count == 0 { " (no files)".dimmed().to_string() } else { String::new() }
         );
         println!(
-            "    {} {} <{}>  {} {}",
+            "      {} {} <{}>",
             "Author:".dimmed(),
             commit.author,
-            commit.email.dimmed(),
+            commit.email.dimmed()
+        );
+        println!(
+            "      {} {}",
             "Date:".dimmed(),
             commit.date[..10].dimmed()
         );
+    }
+    println!();
 
-        // Show files (limit to 15 for display)
-        let max_display = 15;
+    let commit_items: Vec<String> = commits
+        .iter()
+        .map(|c| format!("{}  {}", c.hash[..8].to_string(), c.subject))
+        .collect();
+    let item_refs: Vec<&str> = commit_items.iter().map(|s| s.as_str()).collect();
+
+    let selected_indices = MultiSelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select commits to include (space: toggle, ↑/↓: navigate, enter: confirm)")
+        .items(&item_refs)
+        .defaults(&vec![false; commits.len()])
+        .interact()
+        .context("Failed to get user input, try running in a terminal")?;
+
+    println!();
+    println!(
+        "  {} Selected {} of {} commit(s)\n",
+        "✓".green(),
+        selected_indices.len().to_string().yellow(),
+        commits.len().to_string().yellow()
+    );
+
+    // ── 7b. Ask about showing diffs ──────────────────────────
+    let show_diff = if show_diff_flag {
+        true
+    } else if !selected_indices.is_empty() {
+        Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Show diff preview for selected commits?")
+            .default(false)
+            .interact()?
+    } else {
+        false
+    };
+    if show_diff {
+        println!();
+    }
+
+    // ── 7c. File-level selection for each selected commit ──
+    let mut file_customizations: HashMap<usize, Vec<String>> = HashMap::new();
+
+    for &commit_idx in &selected_indices {
+        let commit = &commits[commit_idx];
+
         if commit.files.is_empty() {
-            println!("    {} (no files listed)", "Files:".dimmed());
-        } else if commit.files.len() <= max_display {
-            for f in &commit.files {
-                println!("    {} {}", "📄".blue(), f.dimmed());
-            }
-        } else {
-            for f in &commit.files[..max_display] {
-                println!("    {} {}", "📄".blue(), f.dimmed());
-            }
-            println!(
-                "    {} ... and {} more files",
-                "📄".blue(),
-                (commit.files.len() - max_display).to_string().dimmed()
-            );
+            continue;
         }
+
+        println!("{}", "─".repeat(64).dimmed());
+        println!("  {} {}  {}", "📄".blue(), commit.hash[..8].bright_green(), commit.subject.bold());
         println!();
 
-        let choice = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("How to include this commit?")
-            .item("Skip")
-            .item("Whole commit")
-            .item("Select individual files")
-            .default(1)
-            .interact()
-            .context("Failed to get user input, try running in a terminal")?;
-
-        match choice {
-            0 => {
-                selections.push(CommitSelection::Skip);
-                println!("  {} Skipped\n", "→".dimmed());
-            }
-            1 => {
-                selections.push(CommitSelection::Whole);
-                println!("  {} Will cherry-pick entire commit\n", "✓".green());
-            }
-            2 => {
-                if commit.files.is_empty() {
-                    println!("  {} No files to select, skipping.\n", "⚠".yellow());
-                    selections.push(CommitSelection::Skip);
-                } else {
-                    let selected_indices = MultiSelect::with_theme(&ColorfulTheme::default())
-                        .with_prompt("Select files (space to toggle, enter to confirm)")
-                        .items(&commit.files.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-                        .interact()
-                        .context("Failed to get user input, try running in a terminal")?;
-
-                    let selected_files: Vec<String> = selected_indices
-                        .iter()
-                        .map(|&i| commit.files[i].clone())
-                        .collect();
-
-                    if selected_files.is_empty() {
-                        println!("  {} No files selected, skipping.\n", "→".dimmed());
-                        selections.push(CommitSelection::Skip);
-                    } else {
-                        println!(
-                            "  {} Selected {} file(s)\n",
-                            "✓".green(),
-                            selected_files.len().to_string().yellow()
-                        );
-                        selections.push(CommitSelection::Files(selected_files));
+        // Show colored diff preview
+        if show_diff {
+            if let Ok(diff) = run_git(&["show", "--color=always", "--format=", &commit.hash]) {
+                let diff = diff.trim();
+                if !diff.is_empty() {
+                    let line_count = diff.lines().count();
+                    for line in diff.lines() {
+                        println!("  │ {}", line);
+                    }
+                    if line_count > 0 {
+                        println!();
                     }
                 }
             }
-            _ => unreachable!(),
+        }
+
+        let file_items: Vec<&str> = commit.files.iter().map(|s| s.as_str()).collect();
+        let picked_files = MultiSelect::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select files (space: toggle, enter: confirm — deselect to exclude)")
+            .items(&file_items)
+            .defaults(&vec![true; file_items.len()])
+            .interact()
+            .context("Failed to get user input")?;
+
+        if picked_files.len() < commit.files.len() && !picked_files.is_empty() {
+            let selected_files: Vec<String> = picked_files.iter().map(|&fi| commit.files[fi].clone()).collect();
+            file_customizations.insert(commit_idx, selected_files);
+            println!("  {} Selected {} of {} file(s)\n", "✓".green(), picked_files.len().to_string().yellow(), commit.files.len().to_string().yellow());
+        } else if picked_files.is_empty() {
+            println!("  {} No files selected, skipping commit.\n", "→".dimmed());
+            // Remove from selected_indices effectively — handled below in selection building
+            let _ = file_customizations.insert(commit_idx, vec![]);
+        } else {
+            println!("  {} Including all files\n", "✓".green());
         }
     }
+
+    // ── 7d. Build selections ─────────────────────────────────
+    let selections: Vec<CommitSelection> = commits
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            if !selected_indices.contains(&i) {
+                CommitSelection::Skip
+            } else if let Some(files) = file_customizations.get(&i) {
+                if files.is_empty() {
+                    CommitSelection::Skip
+                } else {
+                    CommitSelection::Files(files.clone())
+                }
+            } else {
+                CommitSelection::Whole
+            }
+        })
+        .collect();
 
     // ── 8. Show summary and confirm ───────────────────────────
     println!("{}", "═".repeat(64).bright_green());

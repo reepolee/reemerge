@@ -1,3 +1,5 @@
+<img src="/github-reepolee.svg" style="margin-bottom:1rem; width:200px">
+
 # reemerge
 
 An interactive cherry-pick tool for preparing hand-selected branches for pull requests. Choose which commits — and even which files within those commits — to bring into a new PR branch.

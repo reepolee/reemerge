@@ -745,8 +745,10 @@ mod tests {
     // ──────────────────────────────────────────────
 
     use std::sync::atomic::{AtomicU16, Ordering};
+    use std::sync::Mutex;
 
     static TEST_COUNTER: AtomicU16 = AtomicU16::new(0);
+    static GIT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Helper: create a temporary git repo and return its path.
     fn setup_temp_repo() -> std::path::PathBuf {
@@ -795,6 +797,7 @@ mod tests {
 
     #[test]
     fn test_check_git_repo_in_repo() {
+        let _lock = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let repo = setup_temp_repo();
         std::env::set_current_dir(&repo).ok();
         let result = check_git_repo();
@@ -805,6 +808,7 @@ mod tests {
 
     #[test]
     fn test_check_git_repo_outside_repo() {
+        let _lock = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let outside = std::env::temp_dir().join(format!("reemerge_test_no_git_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&outside);
         std::env::set_current_dir(&outside).ok();
@@ -815,6 +819,7 @@ mod tests {
 
     #[test]
     fn test_has_uncommitted_changes_clean() {
+        let _lock = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let repo = setup_temp_repo();
         std::env::set_current_dir(&repo).ok();
         let result = has_uncommitted_changes();
@@ -824,6 +829,7 @@ mod tests {
 
     #[test]
     fn test_has_uncommitted_changes_dirty() {
+        let _lock = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let repo = setup_temp_repo();
         std::env::set_current_dir(&repo).ok();
 
@@ -837,6 +843,7 @@ mod tests {
 
     #[test]
     fn test_run_git_basic() {
+        let _lock = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let repo = setup_temp_repo();
         std::env::set_current_dir(&repo).ok();
         let result = run_git(&["rev-parse", "--git-dir"]);
@@ -852,6 +859,7 @@ mod tests {
 
     #[test]
     fn test_get_commits_between_same_ref() {
+        let _lock = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let repo = setup_temp_repo();
         std::env::set_current_dir(&repo).ok();
 
@@ -865,6 +873,7 @@ mod tests {
 
     #[test]
     fn test_get_commits_between_with_commits() {
+        let _lock = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let repo = setup_temp_repo();
         std::env::set_current_dir(&repo).ok();
 
@@ -895,6 +904,7 @@ mod tests {
 
     #[test]
     fn test_get_commit_files() {
+        let _lock = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let repo = setup_temp_repo();
         std::env::set_current_dir(&repo).ok();
 
@@ -918,6 +928,7 @@ mod tests {
 
     #[test]
     fn test_get_branches_local_only() {
+        let _lock = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let repo = setup_temp_repo();
         std::env::set_current_dir(&repo).ok();
 

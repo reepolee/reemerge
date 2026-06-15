@@ -82,6 +82,9 @@ fn select_branch(branches: &[String], prompt: &str, preferred: &str) -> Result<S
 }
 
 fn get_commits_between(base: &str, head: &str) -> Result<Vec<CommitInfo>> {
+    if base == head {
+        return Ok(Vec::new());
+    }
     let range = format!("{}..{}", base, head);
     let output = run_git(&["log", "--format=%H|%an|%ae|%ai|%s", &range])?;
 
@@ -110,7 +113,7 @@ fn get_commits_between(base: &str, head: &str) -> Result<Vec<CommitInfo>> {
 }
 
 fn get_commit_files(hash: &str) -> Result<Vec<String>> {
-    let output = run_git(&["diff-tree", "--no-commit-id", "-r", "--name-only", hash])?;
+    let output = run_git(&["log", "-1", "--name-only", "--format=", hash])?;
     Ok(output.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
 }
 
@@ -754,7 +757,7 @@ mod tests {
 
         // Init git repo
         let mut cmd = Command::new("git");
-        cmd.args(["init"]).current_dir(&dir);
+        cmd.args(["init", "-b", "main"]).current_dir(&dir);
         let output = cmd.output().expect("Failed to init git repo");
         assert!(output.status.success(), "git init failed");
 

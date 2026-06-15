@@ -235,6 +235,11 @@ fn apply_file_selection(commit: &CommitInfo, files: &[String]) -> Result<()> {
 
 fn main() -> Result<()> {
     // Parse CLI args
+    if std::env::args().any(|a| a == "--version" || a == "-V") {
+        println!("reemerge {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let show_diff_flag = std::env::args().any(|a| a == "--diff");
 
     println!();
@@ -621,5 +626,309 @@ impl Truncate for str {
             let truncated: String = chars[..max.saturating_sub(3)].iter().collect();
             format!("{}...", truncated)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    // ──────────────────────────────────────────────
+    // Truncate trait tests (pure logic, no git)
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn test_truncate_short_string() {
+        let s = "hello";
+        assert_eq!(s.truncated(10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_exact_fit() {
+        let s = "1234567890";
+        assert_eq!(s.truncated(10), "1234567890");
+    }
+
+    #[test]
+    fn test_truncate_needs_ellipsis() {
+        let s = "hello world this is long";
+        let result = s.truncated(10);
+        assert!(result.ends_with("..."));
+        assert_eq!(result.len(), 10);
+    }
+
+    #[test]
+    fn test_truncate_empty_string() {
+        let s = "";
+        assert_eq!(s.truncated(10), "");
+    }
+
+    #[test]
+    fn test_truncate_unicode() {
+        let s = "héllo wörld";
+        let result = s.truncated(8);
+        assert!(result.ends_with("..."));
+        assert_eq!(result.chars().count(), 8);
+    }
+
+    #[test]
+    fn test_truncate_max_zero() {
+        let s = "test";
+        // saturating_sub(3) gives 0 when max < 3, so we get empty string + "..."
+        // but actual behavior: chars[..0] is empty, then format!("{}...", "") -> "..."
+        let result = s.truncated(1);
+        assert_eq!(result, "...");
+    }
+
+    // ──────────────────────────────────────────────
+    // CommitSelection tests (pure logic, no git)
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn test_commit_selection_skip() {
+        let sel = CommitSelection::Skip;
+        assert!(matches!(sel, CommitSelection::Skip));
+    }
+
+    #[test]
+    fn test_commit_selection_whole() {
+        let sel = CommitSelection::Whole;
+        assert!(matches!(sel, CommitSelection::Whole));
+    }
+
+    #[test]
+    fn test_commit_selection_files() {
+        let sel = CommitSelection::Files(vec!["a.ts".to_string(), "b.ts".to_string()]);
+        if let CommitSelection::Files(files) = &sel {
+            assert_eq!(files.len(), 2);
+            assert_eq!(files[0], "a.ts");
+        } else {
+            panic!("Expected Files variant");
+        }
+    }
+
+    #[test]
+    fn test_commit_selection_files_empty() {
+        let sel = CommitSelection::Files(vec![]);
+        if let CommitSelection::Files(files) = &sel {
+            assert!(files.is_empty());
+        } else {
+            panic!("Expected Files variant");
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    // CommitInfo creation test (pure logic)
+    // ──────────────────────────────────────────────
+
+    #[test]
+    fn test_commit_info_creation() {
+        let info = CommitInfo {
+            hash: "abc123".to_string(),
+            author: "Alice".to_string(),
+            email: "alice@example.com".to_string(),
+            date: "2026-01-15".to_string(),
+            subject: "Fix bug".to_string(),
+            files: vec!["src/main.rs".to_string()],
+        };
+        assert_eq!(info.hash, "abc123");
+        assert_eq!(info.author, "Alice");
+        assert_eq!(info.files.len(), 1);
+    }
+
+    // ──────────────────────────────────────────────
+    // Git integration tests (need git installed)
+    // ──────────────────────────────────────────────
+
+    use std::sync::atomic::{AtomicU16, Ordering};
+
+    static TEST_COUNTER: AtomicU16 = AtomicU16::new(0);
+
+    /// Helper: create a temporary git repo and return its path.
+    fn setup_temp_repo() -> std::path::PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("reemerge_test_{}_{}", std::process::id(), id));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("Failed to create temp dir");
+
+        // Init git repo
+        let mut cmd = Command::new("git");
+        cmd.args(["init"]).current_dir(&dir);
+        let output = cmd.output().expect("Failed to init git repo");
+        assert!(output.status.success(), "git init failed");
+
+        // Set default git config for the repo
+        let mut cmd = Command::new("git");
+        cmd.args(["config", "user.name", "Test User"])
+            .current_dir(&dir);
+        cmd.output().expect("Failed to set user.name");
+
+        let mut cmd = Command::new("git");
+        cmd.args(["config", "user.email", "test@example.com"])
+            .current_dir(&dir);
+        cmd.output().expect("Failed to set user.email");
+
+        dir
+    }
+
+    /// Helper: create a file and commit it in the given repo.
+    fn create_and_commit(repo: &std::path::Path, filename: &str, contents: &str, msg: &str) {
+        let file_path = repo.join(filename);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        std::fs::write(&file_path, contents).expect("Failed to write file");
+
+        let mut cmd = Command::new("git");
+        cmd.args(["add", filename]).current_dir(repo);
+        cmd.output().expect("Failed to git add");
+
+        let mut cmd = Command::new("git");
+        cmd.args(["commit", "-m", msg]).current_dir(repo);
+        let output = cmd.output().expect("Failed to git commit");
+        assert!(output.status.success(), "git commit failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    fn test_check_git_repo_in_repo() {
+        let repo = setup_temp_repo();
+        std::env::set_current_dir(&repo).ok();
+        let result = check_git_repo();
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(!path.is_empty());
+    }
+
+    #[test]
+    fn test_check_git_repo_outside_repo() {
+        let outside = std::env::temp_dir().join(format!("reemerge_test_no_git_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&outside);
+        std::env::set_current_dir(&outside).ok();
+        let result = check_git_repo();
+        assert!(result.is_err());
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn test_has_uncommitted_changes_clean() {
+        let repo = setup_temp_repo();
+        std::env::set_current_dir(&repo).ok();
+        let result = has_uncommitted_changes();
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_has_uncommitted_changes_dirty() {
+        let repo = setup_temp_repo();
+        std::env::set_current_dir(&repo).ok();
+
+        // Create a dirty file
+        std::fs::write(repo.join("dirty.txt"), "dirty").ok();
+
+        let result = has_uncommitted_changes();
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_run_git_basic() {
+        let repo = setup_temp_repo();
+        std::env::set_current_dir(&repo).ok();
+        let result = run_git(&["rev-parse", "--git-dir"]);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), ".git");
+    }
+
+    #[test]
+    fn test_run_git_failure() {
+        let result = run_git(&["this-command-does-not-exist"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_commits_between_same_ref() {
+        let repo = setup_temp_repo();
+        std::env::set_current_dir(&repo).ok();
+
+        create_and_commit(&repo, "init.txt", "init\n", "Initial commit");
+
+        // Same ref — no commits between
+        let result = get_commits_between("HEAD", "HEAD");
+        assert!(result.is_ok(), "get_commits_between failed: {:?}", result.err());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_get_commits_between_with_commits() {
+        let repo = setup_temp_repo();
+        std::env::set_current_dir(&repo).ok();
+
+        // Create initial commit on main
+        create_and_commit(&repo, "README.md", "# Project\n", "Initial commit");
+
+        // Create a branch and add more commits
+        let mut cmd = Command::new("git");
+        cmd.args(["checkout", "-b", "feature"]).current_dir(&repo);
+        cmd.output().ok();
+
+        create_and_commit(&repo, "src/lib.rs", "fn hello() {}\n", "Add lib");
+        create_and_commit(&repo, "src/main.rs", "fn main() {}\n", "Add main");
+
+        // Switch back to main
+        let mut cmd = Command::new("git");
+        cmd.args(["checkout", "main"]).current_dir(&repo);
+        cmd.output().ok();
+
+        let result = get_commits_between("main", "feature");
+        assert!(result.is_ok());
+        let commits = result.unwrap();
+        assert_eq!(commits.len(), 2);
+        assert!(commits[0].subject.contains("Add") || commits[1].subject.contains("Add"));
+        assert_eq!(commits[0].author, "Test User");
+        assert_eq!(commits[0].email, "test@example.com");
+    }
+
+    #[test]
+    fn test_get_commit_files() {
+        let repo = setup_temp_repo();
+        std::env::set_current_dir(&repo).ok();
+
+        create_and_commit(&repo, "file_a.txt", "content a\n", "Add file A");
+        create_and_commit(&repo, "file_b.txt", "content b\n", "Add file B");
+
+        // Get the hash of the second commit
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repo)
+            .output()
+            .expect("Failed to get HEAD");
+        let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        let result = get_commit_files(&hash);
+        assert!(result.is_ok());
+        let files = result.unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0], "file_b.txt");
+    }
+
+    #[test]
+    fn test_get_branches_local_only() {
+        let repo = setup_temp_repo();
+        std::env::set_current_dir(&repo).ok();
+
+        create_and_commit(&repo, "initial.txt", "init\n", "Initial");
+
+        // Create another branch
+        let mut cmd = Command::new("git");
+        cmd.args(["branch", "develop"]).current_dir(&repo);
+        cmd.output().ok();
+
+        let result = get_branches();
+        assert!(result.is_ok());
+        let branches = result.unwrap();
+        assert!(branches.contains(&"main".to_string()));
+        assert!(branches.contains(&"develop".to_string()));
     }
 }

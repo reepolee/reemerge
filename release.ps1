@@ -109,7 +109,7 @@ if ($newCommits -gt 0) {
         $bumpType = "patch"
     }
 
-    Write-Host "═══ reefmt release $newVersion for Windows ═══"
+    Write-Host "═══ reemerge release $newVersion for Windows ═══"
     Write-Host "  (Bumping $bumpType from $version -> $newVersion, $newCommits commits since $latestTag)"
 
     $cargoContent = Get-Content "Cargo.toml" -Raw
@@ -157,7 +157,7 @@ if ($newCommits -gt 0) {
     }
 } else {
     # No code changes → just upload the binary
-    Write-Host "═══ reefmt release $version for Windows ═══"
+    Write-Host "═══ reemerge release $version for Windows ═══"
     Write-Host "  (No new commits since $latestTag. Uploading binary only.)"
     $doBump = $false
 }

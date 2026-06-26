@@ -194,7 +194,7 @@ if [ "$new_commits" -gt 0 ] && [ "$force_skip_bump" = false ]; then
 		new_version=$(bump_patch "$version")
 		bump_type="patch"
 	fi
-	echo "═══ reefmt release $new_version for $os ($arch) ═══"
+	echo "═══ reemerge release $new_version for $os ($arch) ═══"
 	echo "  (Bumping $bump_type from $version → $new_version, $new_commits commits since $latest_tag)"
 
 	# Update Cargo.toml
@@ -224,7 +224,7 @@ if [ "$new_commits" -gt 0 ] && [ "$force_skip_bump" = false ]; then
 	fi
 elif [ "$force_skip_bump" = true ]; then
 	# --force: version already bumped in Cargo.toml, just commit and release
-	echo "═══ reefmt release $version for $os ($arch) ═══"
+	echo "═══ reemerge release $version for $os ($arch) ═══"
 	echo "  (Force: resuming release for $version, $new_commits commits since $latest_tag)"
 	do_bump=true
 
@@ -247,7 +247,7 @@ elif [ "$force_skip_bump" = true ]; then
 	fi
 else
 	# No code changes → just upload the binary
-	echo "═══ reefmt release $version for $os ($arch) ═══"
+	echo "═══ reemerge release $version for $os ($arch) ═══"
 	echo "  (No new commits since $latest_tag. Uploading binary only.)"
 	do_bump=false
 fi
@@ -286,7 +286,7 @@ done
 if [ "$do_bump" = true ]; then
 	echo ""
 	echo "→ Committing version bump..."
-	git add Cargo.toml CHANGELOG.md
+	git add Cargo.toml; [ -f CHANGELOG.md ] && git add CHANGELOG.md || true
 	git commit -m "Bump version to $version"
 	echo "  Committed: Bump version to $version"
 fi

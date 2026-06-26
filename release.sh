@@ -3,10 +3,9 @@
 # Builds the native binary for the current platform and publishes it as a GitHub Release.
 # Version is auto-bumped (patch) only when the tag for the current version doesn't exist yet.
 #
-# Usage: bash release.sh [--draft] [--minor] [--force]
+# Usage: bash release.sh [--draft] [--minor]
 #   --draft  Create the release as a draft (default: published)
 #   --minor  Bump the minor version instead of the patch version (default: patch)
-#   --force  Skip version mismatch check (use when pushing ahead of remote)
 #
 # Prerequisites:
 #   - gh CLI (https://cli.github.com) — authenticated via `gh auth login`
@@ -41,13 +40,13 @@ fi
 
 draft_flag=""
 minor_bump=false
-force_flag=false
+force=false
 
 for arg in "$@"; do
 	case "$arg" in
 		--draft) draft_flag="--draft" ;;
 		--minor) minor_bump=true ;;
-		--force) force_flag=true ;;
+		--force) force=true ;;
 	esac
 done
 
@@ -57,8 +56,8 @@ fi
 if [ "$minor_bump" = true ]; then
 	echo "  (Minor bump)"
 fi
-if [ "$force_flag" = true ]; then
-	echo "  (Force mode — version mismatch check skipped)"
+if [ "$force" = true ]; then
+	echo "  (Force mode)"
 fi
 
 # ──────────────────────────────────────────────
@@ -84,6 +83,20 @@ bump_minor() {
 	echo "$major.$new_minor.0"
 }
 
+# Returns 0 (true) if $1 is a greater version than $2
+version_gt() {
+	local a_major="${1%%.*}"; local a_rest="${1#*.}"
+	local a_minor="${a_rest%%.*}"; local a_patch="${a_rest#*.}"
+	local b_major="${2%%.*}"; local b_rest="${2#*.}"
+	local b_minor="${b_rest%%.*}"; local b_patch="${b_rest#*.}"
+
+	[ "$a_major" -gt "$b_major" ] && return 0
+	[ "$a_major" -lt "$b_major" ] && return 1
+	[ "$a_minor" -gt "$b_minor" ] && return 0
+	[ "$a_minor" -lt "$b_minor" ] && return 1
+	[ "$a_patch" -gt "$b_patch" ]
+}
+
 version=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
 if [ -z "$version" ]; then
 	echo "ERROR: Could not find version in Cargo.toml" >&2
@@ -94,22 +107,30 @@ os="$(uname -s)"
 arch="$(uname -m)"
 
 # ──────────────────────────────────────────────
-# Determine binary name for this platform
+# Determine targets and native binary for this platform
 # ──────────────────────────────────────────────
 
 case "$os" in
 	Darwin)
+		targets=(
+			"aarch64-apple-darwin:${APP}-macos-arm64"
+			"x86_64-apple-darwin:${APP}-macos-x64"
+		)
 		case "$arch" in
-			arm64|aarch64) binary_name="${APP}-macos-arm64" ;;
-			x86_64)       binary_name="${APP}-macos-x64" ;;
-			*)            echo "Unsupported arch: $arch" >&2; exit 1 ;;
+			arm64|aarch64) native_binary="${APP}-macos-arm64" ;;
+			x86_64)        native_binary="${APP}-macos-x64" ;;
+			*)             echo "Unsupported arch: $arch" >&2; exit 1 ;;
 		esac
 		;;
 	Linux)
+		targets=(
+			"x86_64-unknown-linux-gnu:${APP}-linux-x64"
+			"aarch64-unknown-linux-gnu:${APP}-linux-arm64"
+		)
 		case "$arch" in
-			x86_64|amd64)      binary_name="${APP}-linux-x64" ;;
-			arm64|aarch64)     binary_name="${APP}-linux-arm64" ;;
-			*)                 echo "Unsupported arch: $arch" >&2; exit 1 ;;
+			x86_64|amd64)  native_binary="${APP}-linux-x64" ;;
+			arm64|aarch64) native_binary="${APP}-linux-arm64" ;;
+			*)             echo "Unsupported arch: $arch" >&2; exit 1 ;;
 		esac
 		;;
 	*)
@@ -130,12 +151,19 @@ if [ -n "$latest_tag" ]; then
 	# If you run the release script without pulling first, versions will diverge.
 	tag_version="${latest_tag#v}"
 	if [ "$tag_version" != "$version" ]; then
-		if [ "$force_flag" = true ]; then
-			echo "  (Warning: local version $version differs from latest tag $tag_version, proceeding with --force)"
+		if version_gt "$tag_version" "$version"; then
+			# Tag is ahead of Cargo.toml → secondary machine, use tag version
+			echo "  (Note: latest tag is $tag_version, Cargo.toml has $version — using tag version)"
+			version="$tag_version"
 		else
-			echo "ERROR: Local version ($version) differs from latest tag ($tag_version)." >&2
-			echo "  Run 'git pull' first to sync, or use --force to override." >&2
-			exit 1
+			# Cargo.toml is ahead of the tag → partially completed prior run or manual bump
+			if [ "$force" = true ]; then
+				echo "  (Force: using Cargo.toml version $version, skipping bump)"
+			else
+				echo "ERROR: Cargo.toml version ($version) is ahead of latest tag ($tag_version)." >&2
+				echo "  Did you forget to create a tag? Use --force to release with the current version." >&2
+				exit 1
+			fi
 		fi
 	fi
 
@@ -147,8 +175,18 @@ fi
 
 tag="v$version"
 
-if [ "$new_commits" -gt 0 ]; then
-	# Code has changed since last release → compute next version
+# When --force is used and Cargo.toml is already ahead of the tag, skip the bump
+# (the version was already bumped by a prior partial run)
+force_skip_bump=false
+if [ "$force" = true ] && [ -n "$latest_tag" ]; then
+	tag_version="${latest_tag#v}"
+	if version_gt "$version" "$tag_version"; then
+		force_skip_bump=true
+	fi
+fi
+
+if [ "$new_commits" -gt 0 ] && [ "$force_skip_bump" = false ]; then
+	# Code has changed since last release → bump version
 	if [ "${minor_bump:-false}" = true ]; then
 		new_version=$(bump_minor "$version")
 		bump_type="minor"
@@ -156,53 +194,90 @@ if [ "$new_commits" -gt 0 ]; then
 		new_version=$(bump_patch "$version")
 		bump_type="patch"
 	fi
-	new_tag="v$new_version"
+	echo "═══ reefmt release $new_version for $os ($arch) ═══"
+	echo "  (Bumping $bump_type from $version → $new_version, $new_commits commits since $latest_tag)"
 
-	# If the bumped tag already exists on remote, another machine already bumped.
-	# Skip the bump and just upload our binary to the existing release.
-	if git ls-remote --tags origin "refs/tags/$new_tag" 2>/dev/null | grep -q .; then
-		echo "═══ reemerge release $new_version for $os ($arch) ═══"
-		echo "  (Tag $new_tag already exists on remote. Uploading binary only.)"
-		version="$new_version"
-		tag="$new_tag"
-		do_bump=false
-	else
-		echo "═══ reemerge release $new_version for $os ($arch) ═══"
-		echo "  (Bumping $bump_type from $version → $new_version, $new_commits commits since $latest_tag)"
+	# Update Cargo.toml
+	sed -i '' "s/version = \"$version\"/version = \"$new_version\"/" Cargo.toml 2>/dev/null || \
+	sed -i "s/version = \"$version\"/version = \"$new_version\"/" Cargo.toml
 
-		# Update Cargo.toml
-		sed -i '' "s/version = \"$version\"/version = \"$new_version\"/" Cargo.toml 2>/dev/null || \
-		sed -i "s/version = \"$version\"/version = \"$new_version\"/" Cargo.toml
+	version="$new_version"
+	tag="v$version"
+	do_bump=true
 
-		version="$new_version"
-		tag="$new_tag"
-		do_bump=true
+	# Update CHANGELOG.md with a new version heading
+	if [ -f CHANGELOG.md ]; then
+		today=$(date +%Y-%m-%d)
+		if ! grep -q "^## \\[$version\\]" CHANGELOG.md 2>/dev/null; then
+			first_version_line=$(grep -n "^## \\[" CHANGELOG.md | head -1 | cut -d: -f1)
+			if [ -n "$first_version_line" ]; then
+				{
+					head -n $((first_version_line - 1)) CHANGELOG.md
+					echo ""
+					echo "## [$version] - $today"
+					echo ""
+					tail -n +"$first_version_line" CHANGELOG.md
+				} > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+				echo "  Updated CHANGELOG.md with version $version"
+			fi
+		fi
+	fi
+elif [ "$force_skip_bump" = true ]; then
+	# --force: version already bumped in Cargo.toml, just commit and release
+	echo "═══ reefmt release $version for $os ($arch) ═══"
+	echo "  (Force: resuming release for $version, $new_commits commits since $latest_tag)"
+	do_bump=true
+
+	# Still update CHANGELOG.md if needed
+	if [ -f CHANGELOG.md ]; then
+		today=$(date +%Y-%m-%d)
+		if ! grep -q "^## \\[$version\\]" CHANGELOG.md 2>/dev/null; then
+			first_version_line=$(grep -n "^## \\[" CHANGELOG.md | head -1 | cut -d: -f1)
+			if [ -n "$first_version_line" ]; then
+				{
+					head -n $((first_version_line - 1)) CHANGELOG.md
+					echo ""
+					echo "## [$version] - $today"
+					echo ""
+					tail -n +"$first_version_line" CHANGELOG.md
+				} > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md
+				echo "  Updated CHANGELOG.md with version $version"
+			fi
+		fi
 	fi
 else
 	# No code changes → just upload the binary
-	echo "═══ reemerge release $version for $os ($arch) ═══"
+	echo "═══ reefmt release $version for $os ($arch) ═══"
 	echo "  (No new commits since $latest_tag. Uploading binary only.)"
 	do_bump=false
 fi
 
-
 # ──────────────────────────────────────────────
-# Run tests
-# ──────────────────────────────────────────────
-
-echo ""
-echo "→ Running tests..."
-cargo test
-
-# ──────────────────────────────────────────────
-# Build
+# Build (all targets for this platform)
 # ──────────────────────────────────────────────
 
-echo ""
-echo "→ Building $binary_name..."
-cargo build --release
-cp "./target/release/$APP" "./$binary_name"
-file "./$binary_name"
+built_assets=()
+for entry in "${targets[@]}"; do
+	target="${entry%%:*}"
+	binary_name="${entry##*:}"
+	echo ""
+	echo "→ Building $binary_name ($target)..."
+	rustup target add "$target" 2>/dev/null || true
+	if [ "$os" = "Linux" ] && [ "$target" = "aarch64-unknown-linux-gnu" ]; then
+		if ! command -v aarch64-linux-gnu-gcc &>/dev/null; then
+			echo "  WARNING: aarch64-linux-gnu-gcc not found — skipping $binary_name."
+			echo "  To enable ARM64 builds: sudo apt-get install gcc-aarch64-linux-gnu"
+			continue
+		fi
+		CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+			cargo build --release --target "$target"
+	else
+		cargo build --release --target "$target"
+	fi
+	cp "./target/$target/release/$APP" "./$binary_name"
+	file "./$binary_name"
+	built_assets+=("./$binary_name#$binary_name")
+done
 
 # ──────────────────────────────────────────────
 # Commit version bump (first machine only)
@@ -211,31 +286,33 @@ file "./$binary_name"
 if [ "$do_bump" = true ]; then
 	echo ""
 	echo "→ Committing version bump..."
-	git add Cargo.toml
+	git add Cargo.toml CHANGELOG.md
 	git commit -m "Bump version to $version"
 	echo "  Committed: Bump version to $version"
 fi
 
 # ──────────────────────────────────────────────
-# Create and push git tag (first machine only)
+# Create and push git tag
 # ──────────────────────────────────────────────
 
+echo ""
+echo "→ Tagging $tag..."
+
+if git rev-parse "$tag" >/dev/null 2>&1; then
+	echo "  Tag $tag already exists locally."
+else
+	git tag "$tag"
+	echo "  Created tag $tag locally."
+fi
+
+# Push tag and (if bumped) the version bump commit together
 if [ "$do_bump" = true ]; then
-	echo ""
-	echo "→ Tagging $tag..."
-
-	if git rev-parse "$tag" >/dev/null 2>&1; then
-		echo "  Tag $tag already exists locally."
-	else
-		git tag "$tag"
-		echo "  Created tag $tag locally."
-	fi
-
-	echo "  Pushing tag $tag to origin..."
-	git push origin "$tag"
 	echo "  Pushing version bump commit..."
 	git push origin HEAD
 fi
+
+echo "  Pushing tag $tag to origin..."
+git push origin "$tag"
 
 # ──────────────────────────────────────────────
 # Create or upload to GitHub Release
@@ -244,39 +321,38 @@ fi
 echo ""
 echo "→ Publishing release $tag..."
 
-asset_path="./$binary_name"
-asset_name="$binary_name"
-
 if gh release view "$tag" >/dev/null 2>&1; then
-	echo "  Release $tag already exists. Uploading asset..."
-	gh release upload "$tag" "$asset_path#$asset_name" --clobber
+	echo "  Release $tag already exists. Uploading assets..."
+	gh release upload "$tag" "${built_assets[@]}" --clobber
 else
 	echo "  Creating release $tag..."
+	# Extract changelog entry for release notes
+	notes_file=$(mktemp)
+	if [ -f CHANGELOG.md ]; then
+		awk "BEGIN{found=0} /^## \\[$version\\]/{found=1; next} /^## \\[/ && found{exit} found{print}" CHANGELOG.md > "$notes_file"
+	fi
+	if [ ! -s "$notes_file" ]; then
+		echo "Release $tag" > "$notes_file"
+	fi
+
 	gh release create "$tag" \
-		"$asset_path#$asset_name" \
+		"${built_assets[@]}" \
 		--title "$tag" \
-		--notes "Release $tag" \
+		--notes-file "$notes_file" \
 		$draft_flag
+
+	rm -f "$notes_file"
 fi
-
-# ──────────────────────────────────────────────
-# Clean up binary artifact
-# ──────────────────────────────────────────────
-
-echo ""
-rm -f "./$binary_name"
-rm -f Cargo.lock
-echo "  Cleaned up $binary_name and Cargo.lock"
 
 # ──────────────────────────────────────────────
 # Install locally (to PATH)
 # ──────────────────────────────────────────────
 
 echo ""
-echo "→ Installing locally..."
+echo "→ Installing locally ($native_binary)..."
 install_dir="$HOME/.local/bin"
 mkdir -p "$install_dir"
-cp "./target/release/$APP" "$install_dir/$APP"
+cp "./$native_binary" "$install_dir/$APP"
 chmod +x "$install_dir/$APP"
 
 if ! echo ":$PATH:" | grep -q ":$install_dir:"; then
@@ -302,9 +378,21 @@ fi
 echo "  Installed to $install_dir/$APP"
 
 # ──────────────────────────────────────────────
+# Cleanup copied binary from project root
+# ──────────────────────────────────────────────
+
+echo ""
+echo "→ Cleaning up..."
+for entry in "${targets[@]}"; do
+	binary_name="${entry##*:}"
+	rm -f "./$binary_name"
+	echo "  Removed ./$binary_name"
+done
+
+# ──────────────────────────────────────────────
 # Done
 # ──────────────────────────────────────────────
 
 echo ""
-echo "✅ Done! Released $binary_name → $tag"
+echo "✅ Done! Released ${#targets[@]} binaries → $tag"
 echo "   View at: https://github.com/$(git remote get-url origin | sed -E 's|.*github.com[/:]||; s|\.git$||')/releases/tag/$tag"

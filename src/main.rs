@@ -4,6 +4,13 @@ use anyhow::{anyhow, Context, Result};
 use colored::*;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, MultiSelect, Select};
 
+fn executable_dir() -> Result<std::path::PathBuf> {
+    let exe = std::env::current_exe().context("Failed to determine executable path")?;
+    exe.parent()
+        .map(std::path::Path::to_path_buf)
+        .context("Executable path has no parent directory")
+}
+
 #[derive(Debug, Clone)]
 struct CommitInfo {
     hash: String,
@@ -238,6 +245,10 @@ fn apply_file_selection(commit: &CommitInfo, files: &[String]) -> Result<()> {
 
 fn main() -> Result<()> {
     // Parse CLI args
+    if std::env::args().any(|a| a == "--where") {
+        println!("{}", executable_dir()?.display());
+        return Ok(());
+    }
     if std::env::args().any(|a| a == "--version" || a == "-V") {
         println!("reemerge {}", env!("CARGO_PKG_VERSION"));
         return Ok(());

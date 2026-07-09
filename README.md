@@ -84,7 +84,7 @@ reemerge
 | Flag | Description |
 |------|-------------|
 | `--diff` | Always show diff preview for selected commits (skips the prompt) |
-| `--version`, `-V` | Print the version and exit |
+| `--version`, `-V` | Print the bare version number and exit |
 
 ### Example walkthrough
 

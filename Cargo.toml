@@ -2,6 +2,7 @@
 name = "reemerge"
 version = "26.7.1"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 dialoguer = { version = "0.11", features = ["fuzzy-select"] }

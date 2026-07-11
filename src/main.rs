@@ -1,5 +1,10 @@
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
+
+fn display_version() -> String {
+    let mut parts = env!("CARGO_PKG_VERSION").split('.');
+    format!("{}.{:02}.{}", parts.next().unwrap_or("0"), parts.next().unwrap_or("0").parse::<u32>().unwrap_or(0), parts.next().unwrap_or("0"))
+}
 use anyhow::{anyhow, Context, Result};
 use colored::*;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, MultiSelect, Select};
@@ -249,8 +254,8 @@ fn main() -> Result<()> {
         println!("{}", executable_dir()?.display());
         return Ok(());
     }
-    if std::env::args().any(|a| a == "--version" || a == "-V") {
-        println!("26.07.1");
+    if std::env::args().any(|a| a == "--version" || a == "-v" || a == "-V") {
+        println!("{}", display_version());
         return Ok(());
     }
 

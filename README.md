@@ -2,18 +2,18 @@
 
 # reemerge
 
-An interactive cherry-pick tool for preparing hand-selected branches for pull requests. Choose which commits — and even which files within those commits — to bring into a new PR branch.
+An interactive cherry-pick tool for preparing hand-selected branches for pull requests. Choose which commits - and even which files within those commits - to bring into a new PR branch.
 
 ## Features
 
-- **Interactive branch selection** — fuzzy-select from local and remote branches
-- **Commit-by-commit selection** — pick individual commits to include
-- **File-level granularity** — select which files from each commit to apply
-- **Diff preview** — preview changes before applying with `--diff` or interactive prompt
-- **Merge commit handling** — automatically retries with `-m 1` when a merge commit is detected
-- **Automatic branch creation** — creates a new PR branch from your target branch
-- **Optional push** — prompts to push the new branch to origin when ready
-- **Colorful terminal UI** — rich colored output with icons and progress indicators
+- **Interactive branch selection** - fuzzy-select from local and remote branches
+- **Commit-by-commit selection** - pick individual commits to include
+- **File-level granularity** - select which files from each commit to apply
+- **Diff preview** - preview changes before applying with `--diff` or interactive prompt
+- **Merge commit handling** - automatically retries with `-m 1` when a merge commit is detected
+- **Automatic branch creation** - creates a new PR branch from your target branch
+- **Optional push** - prompts to push the new branch to origin when ready
+- **Colorful terminal UI** - rich colored output with icons and progress indicators
 
 ## Installation
 
@@ -70,14 +70,14 @@ reemerge
 
 ### Interactive workflow
 
-1. **Select target branch** — the branch you want to PR into (default: `main`)
-2. **Select source branch** — the branch with the changes (default: `develop`)
-3. **Pick commits** — multi-select the commits from the source branch that aren't on the target
-4. **Preview diffs** — optionally review changes before applying
-5. **Select files per commit** — choose which files from each commit to include
-6. **Name your PR branch** — auto-suggested as `pr/<source-branch-name>`
-7. **Confirm and apply** — files are cherry-picked onto the new branch
-8. **Push** — optionally push the new branch to origin
+1. **Select target branch** - the branch you want to PR into (default: `main`)
+2. **Select source branch** - the branch with the changes (default: `develop`)
+3. **Pick commits** - multi-select the commits from the source branch that aren't on the target
+4. **Preview diffs** - optionally review changes before applying
+5. **Select files per commit** - choose which files from each commit to include
+6. **Name your PR branch** - auto-suggested as `pr/<source-branch-name>`
+7. **Confirm and apply** - files are cherry-picked onto the new branch
+8. **Push** - optionally push the new branch to origin
 
 ### Options
 
